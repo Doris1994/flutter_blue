@@ -172,6 +172,14 @@ class FlutterBlue {
     _logLevel = level;
   }
 
+  void openBluethooth() async {
+    await _channel.invokeMethod('enable');
+  }
+
+  void goToSettings() async {
+    await _channel.invokeMethod('goToSettings');
+  }
+
   void _log(LogLevel level, String message) {
     if (level.index <= _logLevel.index) {
       print(message);

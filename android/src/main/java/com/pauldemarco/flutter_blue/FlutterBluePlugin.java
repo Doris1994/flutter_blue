@@ -315,6 +315,21 @@ public class FlutterBluePlugin implements FlutterPlugin, ActivityAware, MethodCa
                 break;
             }
 
+            case "enable":
+            {
+                mBluetoothAdapter.enable();
+                // Intent intent = new Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE);
+                // startActivityForResult(intent, 1);
+                break;
+            }
+
+            case "goToSettings":
+            {
+                Intent intent =  new Intent(Settings.ACTION_BLUETOOTH_SETTINGS);    
+                startActivity(intent); 
+                break;
+            }
+
             case "startScan":
             {
                 if (ContextCompat.checkSelfPermission(activity, Manifest.permission.ACCESS_FINE_LOCATION)
