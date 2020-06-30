@@ -40,6 +40,9 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.lang.reflect.Field;
+import java.lang.reflect.Method;
+import java.lang.reflect.Modifier;
 
 import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
@@ -72,11 +75,14 @@ public class FlutterBluePlugin implements FlutterPlugin, ActivityAware, MethodCa
     private EventChannel stateChannel;
     private BluetoothManager mBluetoothManager;
     private BluetoothAdapter mBluetoothAdapter;
+    private BluetoothProfile mBluetoothProfile;
+    private int mInputProfile;
 
     private FlutterPluginBinding pluginBinding;
     private ActivityPluginBinding activityBinding;
     private Application application;
     private Activity activity;
+    private Protos.ConnectRequest connectOptions;
 
     private static final int REQUEST_FINE_LOCATION_PERMISSIONS = 1452;
     static final private UUID CCCD_ID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb");
@@ -157,6 +163,9 @@ public class FlutterBluePlugin implements FlutterPlugin, ActivityAware, MethodCa
             stateChannel.setStreamHandler(stateHandler);
             mBluetoothManager = (BluetoothManager) application.getSystemService(Context.BLUETOOTH_SERVICE);
             mBluetoothAdapter = mBluetoothManager.getAdapter();
+            mInputProfile = getInputDeviceHiddenConstant();
+            BluetoothAdapter.getDefaultAdapter().getProfileProxy(activity,
+                        mListener, mInputProfile);
             if (registrar != null) {
                 // V1 embedding setup for activity listeners.
                 registrar.addRequestPermissionsResultListener(this);
@@ -167,6 +176,39 @@ public class FlutterBluePlugin implements FlutterPlugin, ActivityAware, MethodCa
         }
     }
 
+    private BluetoothProfile.ServiceListener mListener = new BluetoothProfile.ServiceListener() {
+        @Override
+        public void onServiceConnected(int profile, BluetoothProfile proxy) {
+            Log.i(TAG, "mConnectListener onServiceConnected");
+            //BluetoothProfile proxy这个已经是BluetoothInputDevice类型了
+            if (profile == mInputProfile) {
+                mBluetoothProfile = proxy;
+            }
+        }
+     
+        @Override
+        public void onServiceDisconnected(int profile) {
+            Log.i(TAG, "mConnectListener onServiceConnected");
+        }
+    };
+
+    public static int getInputDeviceHiddenConstant() {
+        Class<BluetoothProfile> clazz = BluetoothProfile.class;
+        for (Field f : clazz.getFields()) {
+            int mod = f.getModifiers();
+            if (Modifier.isStatic(mod) && Modifier.isPublic(mod)
+                    && Modifier.isFinal(mod)) {
+                try {
+                    if (f.getName().equals("INPUT_DEVICE")) {
+                        return f.getInt(null);
+                    }
+                } catch (Exception e) {
+                }
+            }
+        }
+        return -1;
+    }
+
     private void tearDown() {
         Log.i(TAG, "teardown");
         context = null;
@@ -175,12 +217,47 @@ public class FlutterBluePlugin implements FlutterPlugin, ActivityAware, MethodCa
         channel.setMethodCallHandler(null);
         channel = null;
         stateChannel.setStreamHandler(null);
+        mBluetoothAdapter.closeProfileProxy(mInputProfile,mBluetoothProfile);
         stateChannel = null;
         mBluetoothAdapter = null;
         mBluetoothManager = null;
+        mBluetoothProfile = null;
+        connectOptions = null;
         application = null;
     }
 
+    /**
+     * 连接输入设备
+     * @param BluetoothInputDevice
+     */
+    public void connectInputDevice(final BluetoothDevice device) {
+        Log.i(TAG, "connect device:"+device);
+        try {
+            if(mBluetoothProfile != null){
+                //得到BluetoothInputDevice然后反射connect连接设备
+                Method method = mBluetoothProfile.getClass().getMethod("connect",new Class[] { BluetoothDevice.class });
+                method.invoke(mBluetoothProfile, device);
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+    /**
+     * 断开输入设备
+     * @param BluetoothInputDevice
+     */
+    public void disConnectInputDevice(BluetoothDevice device) {
+        Log.i(TAG, "disConnect device:"+device);
+        try {
+            if (device != null && mBluetoothProfile != null) {
+                Method method = mBluetoothProfile.getClass().getMethod("disconnect",
+                        new Class[] { BluetoothDevice.class });
+                method.invoke(mBluetoothProfile, device);
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
 
     @Override
     public void onMethodCall(MethodCall call, Result result) {
@@ -304,15 +381,27 @@ public class FlutterBluePlugin implements FlutterPlugin, ActivityAware, MethodCa
                     }
                     return;
                 }
-
-                // New request, connect and add gattServer to Map
-                BluetoothGatt gattServer;
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                    gattServer = device.connectGatt(activity, options.getAndroidAutoConnect(), mGattCallback, BluetoothDevice.TRANSPORT_LE);
+                if(device.getBondState() == BluetoothDevice.BOND_BONDED)
+                {
+                     // New request, connect and add gattServer to Map
+                     BluetoothGatt gattServer;
+                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                         gattServer = device.connectGatt(activity, options.getAndroidAutoConnect(), mGattCallback, BluetoothDevice.TRANSPORT_LE);
+                     } else {
+                         gattServer = device.connectGatt(activity, options.getAndroidAutoConnect(), mGattCallback);
+                     }
+                     mDevices.put(deviceId, new BluetoothDeviceCache(gattServer));
                 } else {
-                    gattServer = device.connectGatt(activity, options.getAndroidAutoConnect(), mGattCallback);
+                    connectOptions = options;
+                    try { 
+                        Method bondMethod = BluetoothDevice.class.getMethod("createBond");
+                        Log.i(TAG, "开始配对");
+                        bondMethod.invoke(device);
+                    }
+                    catch (Exception e){
+                        result.error("connect_error", "error when connecting to device", null);
+                    }
                 }
-                mDevices.put(deviceId, new BluetoothDeviceCache(gattServer));
                 result.success(null);
                 break;
             }
@@ -699,11 +788,43 @@ public class FlutterBluePlugin implements FlutterPlugin, ActivityAware, MethodCa
         private EventSink sink;
 
         private final BroadcastReceiver mReceiver = new BroadcastReceiver() {
+
+            public void onReceiveBondStateChanged(Intent intent) {
+                BluetoothDevice device = intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE);
+                if (device.getBondState() == BluetoothDevice.BOND_BONDED) {
+                    if(connectOptions == null){
+                        return;
+                    }
+                    connectInputDevice(device);
+                    // New request, connect and add gattServer to Map
+                    BluetoothGatt gattServer;
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                        gattServer = device.connectGatt(activity, connectOptions.getAndroidAutoConnect(), mGattCallback, BluetoothDevice.TRANSPORT_LE);
+                    } else {
+                        gattServer = device.connectGatt(activity, connectOptions.getAndroidAutoConnect(), mGattCallback);
+                    }
+                    mDevices.put(connectOptions.getRemoteId(), new BluetoothDeviceCache(gattServer));
+                    connectOptions = null;
+                }
+            }
+
+            public void onReceiveInputConnectStateChanged(Intent intent) {
+                int state = intent.getIntExtra(BluetoothProfile.EXTRA_STATE,0);
+                BluetoothDevice device = intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE);
+                Log.i(TAG,"state="+state+",device="+device);
+                if(state == BluetoothProfile.STATE_CONNECTED){//连接成功
+                    
+                } else if(state == BluetoothProfile.STATE_DISCONNECTED){//连接失败
+                    
+                }
+            }
             @Override
             public void onReceive(Context context, Intent intent) {
                 final String action = intent.getAction();
-
-                if (BluetoothAdapter.ACTION_STATE_CHANGED.equals(action)) {
+                if(BluetoothDevice.ACTION_BOND_STATE_CHANGED.equals(action)){
+                    onReceiveBondStateChanged(intent);
+                }
+                else if (BluetoothAdapter.ACTION_STATE_CHANGED.equals(action)) {
                     final int state = intent.getIntExtra(BluetoothAdapter.EXTRA_STATE,
                             BluetoothAdapter.ERROR);
                     switch (state) {
@@ -721,6 +842,9 @@ public class FlutterBluePlugin implements FlutterPlugin, ActivityAware, MethodCa
                             break;
                     }
                 }
+                else if(action.equals("android.bluetooth.input.profile.action.CONNECTION_STATE_CHANGED")){
+                    onReceiveInputConnectStateChanged(intent);
+                }
             }
         };
 
@@ -728,6 +852,8 @@ public class FlutterBluePlugin implements FlutterPlugin, ActivityAware, MethodCa
         public void onListen(Object o, EventChannel.EventSink eventSink) {
             sink = eventSink;
             IntentFilter filter = new IntentFilter(BluetoothAdapter.ACTION_STATE_CHANGED);
+            filter.addAction(BluetoothDevice.ACTION_BOND_STATE_CHANGED);
+            filter.addAction("android.bluetooth.input.profile.action.CONNECTION_STATE_CHANGED");
             activity.registerReceiver(mReceiver, filter);
         }
 
