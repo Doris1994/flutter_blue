@@ -31,6 +31,7 @@ import android.content.pm.PackageManager;
 import android.os.Build;
 import android.os.ParcelUuid;
 import android.util.Log;
+import android.provider.Settings;
 
 import com.google.protobuf.ByteString;
 import com.google.protobuf.InvalidProtocolBufferException;
@@ -326,7 +327,7 @@ public class FlutterBluePlugin implements FlutterPlugin, ActivityAware, MethodCa
             case "goToSettings":
             {
                 Intent intent =  new Intent(Settings.ACTION_BLUETOOTH_SETTINGS);    
-                startActivity(intent); 
+                application.startActivity(intent); 
                 break;
             }
 
